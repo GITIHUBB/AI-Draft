@@ -843,12 +843,22 @@ export default function Dashboard() {
     e?.preventDefault();
     const query = draft.trim();
     if (!query || thinking) return;
+    // Prior turns ride along with the request so the backend can replay them to
+    // Gemini as conversation history. This is what lets it remember details the
+    // user mentioned earlier (a name, a preference) instead of starting cold.
+    // `messages` still excludes the message being sent, so the new turn is not
+    // duplicated in the history.
+    const history = messages
+      .filter((m) => m.id !== 'welcome' && !m.error && (m.text || '').trim())
+      .slice(-40)
+      .map((m) => ({ role: m.role === 'user' ? 'user' : 'model', text: m.text }));
     setMessages((m) => [...m, { id: `u${Date.now()}`, role: 'user', text: query }]);
     setDraft('');
     setThinking(true);
     try {
       const res = await apiFetch('/query-agent', {
         query,
+        history,
         gravity_filter: gravity,
         oxygen_conc: oxygen,
         pressure,

@@ -36,6 +36,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_DIR = os.path.join(BASE_DIR, "chroma_db")
 COLLECTION = "langchain"
 GEMINI_MODEL = "gemini-2.5-flash"
+# Dynamic without drifting: 0.7 keeps replies varied from turn to turn while
+# still landing on the grounded, cited answers the dashboard depends on.
+GEMINI_TEMPERATURE = 0.7
+# Conversation turns replayed to the model on every request. Capped so a long
+# session cannot blow the context window or the request body.
+MAX_HISTORY_TURNS = 40
 
 # Secrets come from `.env` next to this file so the key never lands in source.
 # Put `GEMINI_API_KEY=...` in that file and restart - nothing else changes.
@@ -90,61 +96,12 @@ def _file_name(source: Any) -> str:
     return str(source or "").replace("\\", "/").split("/")[-1]
 
 
-# --- Conversational fallback -------------------------------------------------
-# Vocabulary that marks a message as belonging to this domain at all. Greetings
-# ("hello", "hi", "hey"), small talk and off-topic requests contain none of it,
-# so without this check they miss the retrieval relevance floor and come back as
-# "no passages matched" - which reads as a broken tool rather than an assistant.
-#
-# Each alternative is a *prefix* anchored by a leading \b and deliberately has no
-# trailing \b, so stems match their real forms: combust -> combustion,
-# ignit -> ignition, flammab -> flammability, extinct -> extinction.
-_SCIENCE_RE = re.compile(
-    r"\b("
-    # combustion behaviour
-    r"flame|fire|burn|combust|candle|ignit|extinct|soot|smoke|smolder|pyroly|"
-    # atmosphere and gravity
-    r"oxygen|o2|co2|microgravity|gravity|weightless|0g|1g|pressure|airflow|vent|"
-    # where the work happens
-    r"orbit|space|iss|spacecraft|station|cabin|module|nasa|sofie|bass|saffire|"
-    r"flex|ntrs|"
-    # physics and measurement
-    r"spread|pool|droplet|radiat|thermal|heat|temperature|"
-    # materials
-    r"material|fuel|flammab|polymer|fabric|pmma|acrylic|nomex|kevlar|silicone|"
-    r"cotton|teflon|ptfe|polycarbonate|wood|plastic"
-    r")",
-    re.IGNORECASE,
-)
-
-
-def is_conversational(text: str) -> bool:
-    """True for greetings, small talk, or anything outside microgravity fire."""
-    cleaned = " ".join(str(text or "").split())
-    if not cleaned:
-        return True
-    # Domain vocabulary anywhere wins, so "help me with flame spread" or
-    # "hi, is PMMA safe?" still go down the research path.
-    if _SCIENCE_RE.search(cleaned):
-        return False
-    # No domain vocabulary: greeting, thanks, chit-chat or off-topic request.
-    return True
-
-
-_FRIENDLY_ANSWER = """Hey - I'm the Flame in Freefall assistant, an AI guide over NASA's microgravity combustion and fire-safety papers.
-
-Questions I can answer well:
-- How does flame spread change at 0g compared with 1g?
-- What oxygen and pressure limits let a flame sustain itself in microgravity?
-- Which materials burn worst in space - PMMA, Nomex, Kevlar, silicone, cotton?
-- How does forced airflow shift the extinction limit?
-
-You can also drive the numbers yourself on the dashboard:
-- Gravity mode (0g / 0.16g / 1g) - the control in the top bar.
-- Oxygen %, ambient pressure and airflow - the sliders on the left.
-- Press "RUN SIMULATION & RANK RISK" to rank all five materials at those settings.
-
-Then ask me about the result and I'll answer it with page-level citations. What would you like to dig into?"""
+# --- Retrieval, not keywords, decides what is grounded ------------------------
+# There is deliberately no domain-vocabulary gate here. `similarity_search`
+# already discards anything past MAX_DISTANCE, so a greeting, small talk or an
+# off-topic question simply comes back with no passages and is answered
+# conversationally by Gemini. A keyword list could only ever guess, and the
+# guesses used to route perfectly good questions into a canned reply.
 
 
 @asynccontextmanager
@@ -366,14 +323,19 @@ def _api_key(explicit: Optional[str] = None) -> Optional[str]:
     return key
 
 
-def _no_match_answer() -> str:
-    """Shown when nothing in the index is close enough to ground an answer."""
+def _no_key_answer() -> str:
+    """Only when no Gemini key is set *and* retrieval found nothing.
+
+    Infrastructure message, not a chat path: with no model there is genuinely
+    nothing to talk to. Never reachable while the key is configured, so it
+    cannot make one kind of question look different from another.
+    """
     return (
-        "Nothing in the NASA index matched that question closely enough to answer "
-        "from, so an answer here would be guesswork.\n\n"
-        "Try wording it around flame spread, extinction limits, oxygen "
-        "concentration, gravity level, or a specific material (PMMA, Nomex, "
-        "Kevlar, silicone, cotton)."
+        "I can't answer that right now - there's no Gemini key configured, so "
+        "I have no model to think with, and the NASA index had nothing close "
+        "enough to quote from.\n\n"
+        "Add GEMINI_API_KEY to `.env` next to main.py and restart the server to "
+        "turn me back on, conversation memory included."
     )
 
 
@@ -395,13 +357,18 @@ def _passage_list(question: str, docs: list) -> str:
 
 
 def _preview_answer(question: str, docs: list) -> str:
-    """Retrieval preview shown when no Gemini key is configured."""
+    """Retrieval preview shown when no Gemini key is configured.
+
+    The one path where an answer cannot come from Gemini, because there is no
+    key to call it with - so it says so instead of imitating a reply.
+    """
     return "\n".join(
         [
-            "Written answers need a Gemini key, so this is only the raw retrieval "
-            "preview - not a synthesised answer.",
-            "Paste it into `.env` next to main.py as GEMINI_API_KEY=... and restart "
-            "the server.",
+            "I can't write this one in my own voice yet - there's no Gemini key "
+            "configured, so all I have is the raw retrieval below rather than a "
+            "proper answer.",
+            "Add GEMINI_API_KEY to `.env` next to main.py and restart the "
+            "server and I'll answer normally.",
             "",
             _passage_list(question, docs),
         ]
@@ -409,18 +376,31 @@ def _preview_answer(question: str, docs: list) -> str:
 
 
 def _unavailable_answer(question: str, docs: list, exc: BaseException) -> str:
-    """Clean fallback handed back once retries are exhausted."""
+    """Handed back once retries are exhausted.
+
+    One voice and one shape whether or not retrieval had anything, so a science
+    question failing mid-session does not surface a visibly different style of
+    message from a casual one. Only reachable when the Gemini call itself has
+    failed, after 3 attempts.
+    """
     reason = _describe_error(exc)
     if not _is_transient(exc):
         # Permanent (bad key, blocked prompt): no point waiting, just say so.
-        return (
-            f"The Gemini call failed ({reason}).\n\n"
-            "Check GEMINI_API_KEY in `.env` next to main.py and restart the server."
+        lead = (
+            f"I couldn't reach Gemini for that one ({reason}). Check "
+            "GEMINI_API_KEY in `.env` next to main.py and restart the server."
         )
+    else:
+        lead = (
+            f"Gemini is busy right now ({reason}) - I retried 3 times with "
+            "backoff and it still didn't recover, so I'd rather say so than "
+            "guess at an answer."
+        )
+    if not docs:
+        return lead + " Give it another go in a moment."
     return (
-        f"Gemini is unavailable right now: {reason}. I retried up to 3 times "
-        "with exponential backoff and it did not recover, so rather than guess "
-        "here are the passages the answer would be grounded in.\n\n"
+        lead
+        + "\n\nHere is what I would have grounded the answer in:\n\n"
         + _passage_list(question, docs)
     )
 
@@ -460,63 +440,76 @@ def _settings_block(
     )
 
 
-def _build_prompt(
-    question: str,
+# The persona contract. Deliberately a module-level constant so it is obvious
+# (and testable) that every request - combustion physics, general trivia, small
+# talk or a polite decline - is generated from one identical instruction.
+# Query-type-specific formatting rules are absent on purpose: rules like
+# "casual replies get 2-4 sentences" or "science replies stay under 300 words"
+# are what made the two kinds of answer read like different assistants.
+_PERSONA_INSTRUCTION = """You are the official AI guide for the 'Flame in Freefall' microgravity combustion dashboard.
+
+Tone & Formatting Rules:
+- Voice: Warm, conversational, articulate, and engaging across ALL topics.
+- Uniform Style: Maintain a consistent, natural formatting style regardless of whether answering a science query, casual chat, or general knowledge question. Avoid changing into a robotic or overly template-driven format for science questions.
+- Domain Expertise: Answer microgravity, fire-safety, and simulation questions with expert clarity without breaking character.
+- General Knowledge: Answer general trivia (e.g., "Who is the richest person in the world?") directly and naturally using your general knowledge.
+- Out-of-Scope Requests: For unsupported actions (like setting alarms or checking live device settings), humbly and politely decline in 1 short, natural sentence.
+- Context Memory: Use the provided chat history to remember user details (such as names or prior conversation topics)."""
+
+
+def _system_instruction(
     gravity_filter: Optional[str],
-    context_text: str,
     settings_block: Optional[str] = None,
 ) -> str:
+    """One system instruction, byte-identical in voice for every query type.
+
+    ``_PERSONA_INSTRUCTION`` owns the tone. Everything appended below it is
+    factual state (dashboard controls) or retrieval plumbing (how to treat
+    attached passages) - never a competing rule about how a reply should be
+    shaped, so there is nothing here that can push a science answer into a
+    different format from a casual one.
+    """
     gravity = (gravity_filter or "").strip() or "not specified"
-    passages = context_text.strip()
-
-    # The fallback rule leads, so it wins for greetings and off-topic messages
-    # and an empty passage list is expected rather than an error condition.
-    prompt = (
-        "You are the Flame in Freefall assistant: a NASA spacecraft fire-safety "
-        "research analyst for microgravity combustion.\n\n"
-        "FALLBACK RULE (check this first):\n"
-        "If the message is a casual greeting (hello, hi, hey), small talk, a "
-        "thank-you, a request for a joke, or anything else outside microgravity "
-        "combustion, do NOT report missing passages or retrieval errors. Reply "
-        "naturally and helpfully in 3-6 sentences as the NASA Microgravity Fire "
-        "Safety AI assistant: say who you are, name two or three things the user "
-        "can ask about (flame spread, oxygen limits, material flammability at "
-        "0g), and guide them to the dashboard controls - the gravity mode in the "
-        "header, the oxygen / pressure / airflow sliders, and the "
-        "'RUN SIMULATION & RANK RISK' button.\n\n"
-    )
-
+    parts = [
+        _PERSONA_INSTRUCTION,
+        "",
+        "Dashboard context:",
+        f"- Gravity mode selected: {gravity}.",
+        "- The oxygen / pressure / airflow sliders and 'RUN SIMULATION & RANK "
+        "RISK' drive a ranking heuristic over NASA data rather than a physics "
+        "simulation, so describe that output as an estimate.",
+        "",
+        "Retrieved context:",
+        "- PASSAGES may be attached to the user's message. When they answer the "
+        "question, use them as your source and cite inline like "
+        "[19930010989.pdf p.202] - keeping this same voice and formatting as "
+        "everything else.",
+        "- When they do not answer the question, ignore them instead of forcing "
+        "a citation.",
+        "- When none are attached, answer from your own knowledge and never "
+        "invent figures.",
+    ]
     if settings_block:
-        prompt += settings_block + "\n\n"
+        parts.extend(["", settings_block])
+    return "\n".join(parts)
 
-    if passages:
-        prompt += (
-            "ANSWERING A RESEARCH QUESTION\n"
-            "Write an answer a researcher would find useful:\n"
-            "- Open with a direct answer to the question in 1-3 sentences.\n"
-            "- Then explain your reasoning, combining passages that agree and "
-            "calling out where they conflict or describe different conditions.\n"
-            "- Support each claim with an inline citation like "
-            "[19930010989.pdf p.202].\n"
-            "- Keep the numbers the passages give (spread rates, oxygen limits, "
-            "gravity levels) rather than paraphrasing them away.\n"
-            "- Gravity level the user selected: " + gravity + ".\n"
-            "- If the passages do not contain enough to answer, say precisely "
-            "what is missing instead of filling the gap with outside knowledge "
-            "or invented figures.\n"
-            "- Stay under about 300 words. Use short paragraphs or a labelled "
-            "list.\n\n"
-        )
-    else:
-        prompt += (
-            "There are no retrieved passages attached to this message, so the "
-            "fallback rule above applies.\n\n"
-        )
 
-    prompt += "QUESTION\n" + question + "\n"
-    if passages:
-        prompt += "\nPASSAGES\n" + passages + "\n"
-    return prompt
+def _user_turn(question: str, context_text: str) -> str:
+    """The current turn: the user's message, plus passages when retrieval found any.
+
+    The question is always first and unframed, so a casual or general-knowledge
+    message reaches Gemini completely bare - identical to how it arrives when
+    nothing was retrieved. Passages are presented as optional source material
+    rather than as a cue to switch into a formal answer format.
+    """
+    passages = context_text.strip()
+    if not passages:
+        return question
+    return (
+        f"{question}\n\n"
+        "Retrieved passages (use these only if they actually answer the "
+        "question above):\n" + passages
+    )
 
 
 # --- Gemini text generation with retry ---------------------------------------
@@ -570,18 +563,76 @@ def _describe_error(exc: BaseException) -> str:
     return text[:160] + "..." if len(text) > 160 else text
 
 
+def _clean_history(raw: Any) -> list:
+    """Normalise the client's history into clean ``user`` / ``model`` turns."""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    turns = []
+    for turn in list(raw)[-MAX_HISTORY_TURNS:]:
+        if not isinstance(turn, dict):
+            continue
+        role = str(turn.get("role") or "").strip().lower()
+        text = str(
+            turn.get("text") or turn.get("content") or turn.get("message") or ""
+        ).strip()
+        if not text:
+            continue
+        if role == "assistant":
+            role = "model"
+        if role not in ("user", "model"):
+            continue
+        turns.append({"role": role, "text": text})
+    # Gemini's content list must open with a user turn.
+    while turns and turns[0]["role"] != "user":
+        turns.pop(0)
+    return turns
+
+
+def _build_contents(history: list, question: str) -> list:
+    """History plus the current question, shaped as a Gemini content list.
+
+    Adjacent turns of the same role are folded together, because Gemini expects
+    roles to alternate and otherwise rejects the request with a 400.
+    """
+    from google.genai import types
+
+    merged: list = []
+    for turn in list(history) + [{"role": "user", "text": question}]:
+        if merged and merged[-1]["role"] == turn["role"]:
+            merged[-1] = {
+                "role": turn["role"],
+                "text": merged[-1]["text"] + "\n" + turn["text"],
+            }
+        else:
+            merged.append(dict(turn))
+    while merged and merged[0]["role"] != "user":
+        merged.pop(0)
+    return [
+        types.Content(role=turn["role"], parts=[types.Part(text=turn["text"])])
+        for turn in merged
+    ]
+
+
 @retry(
     wait=wait_random_exponential(min=1, max=10),
     stop=stop_after_attempt(3),
     retry=retry_if_exception(_is_transient),
     reraise=True,
 )
-def _call_gemini(prompt: str, api_key: str) -> str:
+def _call_gemini(contents: list, system_instruction: str, api_key: str) -> str:
     """One Gemini generation, retried up to 3 times on transient errors."""
     from google import genai
+    from google.genai import types
 
     client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=GEMINI_TEMPERATURE,
+        ),
+    )
     text = (response.text or "").strip()
     if not text:
         raise RuntimeError("Gemini returned an empty response")
@@ -594,9 +645,13 @@ def _gemini_answer(
     context_text: str,
     api_key: str,
     settings_block: Optional[str] = None,
+    history: Any = None,
 ) -> str:
     return _call_gemini(
-        _build_prompt(question, gravity_filter, context_text, settings_block),
+        _build_contents(
+            _clean_history(history), _user_turn(question, context_text)
+        ),
+        _system_instruction(gravity_filter, settings_block),
         api_key,
     )
 
@@ -606,6 +661,11 @@ class QueryRequest(BaseModel):
     query: Optional[str] = None
     gravity_filter: Optional[str] = None
     api_key: Optional[str] = None
+    # Prior turns of this conversation as
+    # ``[{"role": "user" | "assistant" | "model", "text": ...}, ...]``.
+    # Replayed to Gemini on every call so the assistant remembers what was
+    # said earlier. Optional: plain curl and older clients simply omit it.
+    history: Optional[list] = None
     # Live dashboard controls, so answers can be phrased in terms of the
     # parameters the user is actually looking at. All optional: older clients
     # (and plain curl) simply omit them.
@@ -643,12 +703,10 @@ def query_agent(request: QueryRequest):
         request.oxygen_conc, request.pressure, request.airflow, request.fuel
     )
 
-    # Greetings and off-topic messages are routed before retrieval: they have no
-    # domain vocabulary, so they would miss the relevance floor and otherwise
-    # surface the "no passages matched" error.
-    conversational = is_conversational(question)
-
-    docs = [] if conversational else similarity_search(question, k=MAX_PASSAGES)
+    # Retrieval runs for every message. Casual or off-topic wording simply finds
+    # nothing past the relevance floor, and an empty passage list is what marks
+    # the answer as ungrounded - no keyword gate decides what may be asked.
+    docs = similarity_search(question, k=MAX_PASSAGES)
 
     retrieved_sources = []
     context_text = ""
@@ -678,30 +736,22 @@ def query_agent(request: QueryRequest):
             "confidence": confidence_of(doc.get("distance")),
         })
 
-    # Decide how to answer: chit-chat, nothing matched, no key, key + call,
-    # key + failure.
+    # One code path for every message: hand the question, whatever passages
+    # retrieval found, and the conversation history to Gemini. Chit-chat simply
+    # arrives with no passages and is answered as chit-chat.
     api_key = _api_key(request.api_key)
     gemini_used = False
-    if conversational:
-        if api_key is None:
-            ai_answer = _FRIENDLY_ANSWER
-        else:
-            try:
-                ai_answer = _gemini_answer(
-                    question, request.gravity_filter, "", api_key, settings_block
-                )
-                gemini_used = True
-            except Exception:
-                # Small talk should never surface an API error to the user.
-                ai_answer = _FRIENDLY_ANSWER
-    elif not docs:
-        ai_answer = _no_match_answer()
-    elif api_key is None:
-        ai_answer = _preview_answer(question, docs)
+    if api_key is None:
+        ai_answer = _preview_answer(question, docs) if docs else _no_key_answer()
     else:
         try:
             ai_answer = _gemini_answer(
-                question, request.gravity_filter, context_text, api_key, settings_block
+                question,
+                request.gravity_filter,
+                context_text,
+                api_key,
+                settings_block,
+                request.history,
             )
             gemini_used = True
         except Exception as exc:
@@ -728,7 +778,7 @@ def query_agent(request: QueryRequest):
         "gravity_filter": request.gravity_filter,
         "gemini_used": gemini_used,
         "passages_used": len(docs),
-        "conversational": conversational,
+        "conversational": not docs,
     }
 
 
