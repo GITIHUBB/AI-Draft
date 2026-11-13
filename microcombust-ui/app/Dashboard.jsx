@@ -657,6 +657,8 @@ export default function Dashboard() {
   const [running, setRunning] = useState(false);
   const [remoteRank, setRemoteRank] = useState(null);
   const [rankNote, setRankNote] = useState(DEFAULT_RANK_NOTE);
+  // Last simulation error, shown as a dismissible banner in the controls panel.
+  const [simError, setSimError] = useState(null);
 
   // Chat
   const [messages, setMessages] = useState([WELCOME]);
@@ -997,23 +999,44 @@ export default function Dashboard() {
 
   async function runSimulation() {
     setRunning(true);
+    setSimError(null);
+    let res = null;
     try {
-      const res = await apiFetch('/rank-materials', {
+      res = await apiFetch('/rank-materials', {
         oxygen_conc: oxygen,
+        pressure,
         gravity,
         airflow,
         material: fuel,
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        let body = '';
+        try {
+          body = await res.text();
+        } catch {
+          /* body unreadable - report status only */
+        }
+        console.error(`Simulation request failed: HTTP ${res.status}`, body);
+        throw new Error(
+          `HTTP ${res.status}${body ? ` - ${body.slice(0, 300)}` : ''}`,
+        );
+      }
       const parsed = normalizeRanking(await res.json());
       if (!parsed.length) throw new Error('Empty ranking');
       setRemoteRank(parsed);
+      setSimError(null);
       setApiOnline(true);
       setRankNote(`Ranked by the backend at ${gravity}, ${oxygen}% O₂.`);
-    } catch {
+    } catch (err) {
+      // Log to DevTools so a silent failure is never invisible, then surface
+      // a banner in the UI and fall back to the local estimate.
+      console.error('Simulation request failed:', err);
+      setSimError(err instanceof Error ? err.message : String(err));
       setRemoteRank(null);
       setApiOnline(false);
-      setRankNote('Backend unreachable. Showing the local estimate instead.');
+      setRankNote(
+        'Backend unreachable or simulation failed. Showing the local estimate instead.',
+      );
     } finally {
       setRunning(false);
     }
@@ -1199,8 +1222,21 @@ export default function Dashboard() {
 
                 <button type="button" onClick={runSimulation} disabled={running} className="run">
                   {running ? <Loader2 className="animate-spin" aria-hidden /> : <Play fill="currentColor" aria-hidden />}
-                  {running ? 'Ranking…' : 'RUN SIMULATION & RANK RISK'}
+                  {running ? 'Running Simulation…' : 'RUN SIMULATION & RANK RISK'}
                 </button>
+                {simError && (
+                  <div className="sim-error" role="alert">
+                    <AlertTriangle aria-hidden />
+                    <span>Simulation failed: {simError}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSimError(null)}
+                      className="sim-error-dismiss"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
               </div>
             </Panel>
 
