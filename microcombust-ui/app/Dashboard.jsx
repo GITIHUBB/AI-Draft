@@ -507,6 +507,7 @@ function buildSummaryReport(opts) {
     rankNote,
     analysis,
     apiOnline,
+    aiProvider,
     generatedAt,
   } = opts;
 
@@ -979,6 +980,7 @@ export default function Dashboard() {
       rankNote,
       analysis: lastAnalysis,
       apiOnline,
+      aiProvider,
       generatedAt: now,
     });
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
