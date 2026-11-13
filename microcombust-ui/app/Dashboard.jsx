@@ -959,6 +959,12 @@ export default function Dashboard() {
     return out;
   }, [ranking]);
 
+  // Top-risk result from the latest backend calculation (only when remoteRank is set).
+  const topRisk = useMemo(
+    () => (ranking.length ? [...ranking].sort((a, b) => b.score - a.score)[0] : null),
+    [ranking],
+  );
+
   const selectedId = fuelToId(fuel);
 
   // Latest assistant reply (excluding the welcome banner) captured in reports.
@@ -1222,7 +1228,7 @@ export default function Dashboard() {
 
                 <button type="button" onClick={runSimulation} disabled={running} className="run">
                   {running ? <Loader2 className="animate-spin" aria-hidden /> : <Play fill="currentColor" aria-hidden />}
-                  {running ? 'Running Simulation…' : 'RUN SIMULATION & RANK RISK'}
+                  {running ? 'Calculating Risk…' : 'RUN SIMULATION & RANK RISK'}
                 </button>
                 {simError && (
                   <div className="sim-error" role="alert">
@@ -1239,6 +1245,32 @@ export default function Dashboard() {
                 )}
               </div>
             </Panel>
+
+            {/* Backend simulation results (standalone card, between controls and matrix) */}
+            {remoteRank && topRisk && (
+              <Panel title="Backend simulation results" icon={Flame} a="#34d399" b="#22d3ee" iconColor="#34d399">
+                <div className="pb">
+                  <div className="sim-insight">
+                    <div className="sim-insight-header">
+                      <Flame aria-hidden />
+                      Backend simulation results
+                    </div>
+                    <div className="sim-insight-body">
+                      <span className="sim-insight-conditions">
+                        Calculated at {gravity}, {oxygen}% O₂, {pressure} kPa, {airflow} cm/s airflow, fuel: {fuel}.
+                      </span>
+                    </div>
+                    <div className="sim-insight-result">
+                      <span>
+                        Highest risk: <span className="material">{topRisk.material}</span> —{' '}
+                        <span className="score">{Math.round(topRisk.score * 100)}</span>{' '}
+                        <span className="tier">({topRisk.tier})</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </Panel>
+            )}
 
             <Panel
               title="Material flammability risk matrix"
@@ -1313,7 +1345,7 @@ export default function Dashboard() {
               ))}
               {thinking && (
                 <div className="thinking">
-                  <Loader2 className="animate-spin" aria-hidden /> Searching NASA records…
+                  <Loader2 className="animate-spin" aria-hidden /> Overthinking this so you don't have to…
                 </div>
               )}
               <div ref={endRef} />
