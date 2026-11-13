@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, AlertTriangle, ArrowDown, ArrowUp, ChevronDown, ChevronUp, Database,
   Download, ExternalLink, FileText, Flame, Loader2, Play, Send, ShieldCheck,
-  Sparkles, User, Wind, X,
+  Sparkles, Wind, X,
 } from 'lucide-react';
 
 /* ------------------------------------------------------------------ */
@@ -71,34 +71,12 @@ const MATERIALS = [
   { id: 'Kevlar', label: 'Kevlar', base: 0.25, fuel: 'Kevlar Blend' },
 ];
 
+// `k` feeds the --k custom property that globals.css uses to tint the
+// matrix columns, bars and risk badges.
 const TIERS = {
-  High: {
-    title: 'High risk',
-    hint: 'Sustained spread likely',
-    column: 'border-rose-500/25 bg-linear-to-b from-rose-500/20 to-rose-500/5',
-    heading: 'text-rose-200',
-    chip: 'border-rose-400/40 bg-rose-500/15 text-rose-200',
-    bar: 'bg-linear-to-r from-rose-300 to-rose-500',
-    dot: 'bg-rose-400',
-  },
-  Medium: {
-    title: 'Medium risk',
-    hint: 'Conditional spread',
-    column: 'border-amber-500/25 bg-linear-to-b from-amber-500/20 to-amber-500/5',
-    heading: 'text-amber-200',
-    chip: 'border-amber-400/40 bg-amber-500/15 text-amber-200',
-    bar: 'bg-linear-to-r from-amber-300 to-amber-500',
-    dot: 'bg-amber-400',
-  },
-  Low: {
-    title: 'Low risk',
-    hint: 'Self-extinguishing in most cases',
-    column: 'border-emerald-500/25 bg-linear-to-b from-emerald-500/20 to-emerald-500/5',
-    heading: 'text-emerald-200',
-    chip: 'border-emerald-400/40 bg-emerald-500/15 text-emerald-200',
-    bar: 'bg-linear-to-r from-emerald-300 to-emerald-500',
-    dot: 'bg-emerald-400',
-  },
+  High: { title: 'High risk', hint: 'Sustained spread likely', k: '#fb7185' },
+  Medium: { title: 'Medium risk', hint: 'Conditional spread', k: '#fbbf24' },
+  Low: { title: 'Low risk', hint: 'Self-extinguishing in most cases', k: '#34d399' },
 };
 
 /* ------------------------------------------------------------------ */
@@ -203,22 +181,14 @@ const pct = (c) => (c == null ? null : Math.round((c <= 1 ? c * 100 : c)));
 /* ------------------------------------------------------------------ */
 /* Small UI pieces                                                     */
 /* ------------------------------------------------------------------ */
-function Panel({ title, icon: Icon, right, children, className = '', delay }) {
+function Panel({ title, icon: Icon, right, children, className = '', a = '#22d3ee', b = '#a78bfa', iconColor }) {
   return (
-    <section
-      style={delay ? { animationDelay: `${delay}ms` } : undefined}
-      className={`relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04] shadow-[inset_0_1px_0_0_#ffffff0f,0_24px_60px_-30px_#000000f2] backdrop-blur-xl transition duration-300 hover:border-white/[0.16] ${className}`}
-    >
-      {/* Hairline highlight across the top edge catches the light */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-cyan-400/70 to-transparent"
-      />
-      <header className="flex items-center justify-between gap-3 border-b border-white/[0.07] bg-white/[0.03] px-5 py-3.5">
-        <h2 className="flex items-center gap-2.5 text-sm font-semibold tracking-tight text-white/90">
+    <section style={{ '--a': a, '--b': b }} className={`glass ${className}`}>
+      <header className="ph">
+        <h2>
           {Icon && (
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-cyan-400/20 bg-cyan-400/10 text-cyan-300">
-              <Icon className="h-4 w-4" aria-hidden />
+            <span className="ic" style={iconColor ? { '--c': iconColor } : undefined}>
+              <Icon aria-hidden />
             </span>
           )}
           {title}
@@ -230,17 +200,23 @@ function Panel({ title, icon: Icon, right, children, className = '', delay }) {
   );
 }
 
-function Slider({ id, label, unit, value, min, max, step = 1, onChange }) {
+function Slider({ id, label, unit, value, min, max, step = 1, digits = 0, c1, c2, onChange, onSlide }) {
   const fill = ((value - min) / (max - min)) * 100;
+  const handleChange = (e) => {
+    const next = Number(e.target.value);
+    onChange(next);
+    // Lets the fire backdrop flare and shift colour as the value rises.
+    onSlide?.((next - min) / (max - min));
+  };
   return (
     <div>
-      <div className="mb-2.5 flex items-center justify-between gap-3">
-        <label htmlFor={id} className="text-[13px] font-medium text-slate-300">
+      <div className="row">
+        <label htmlFor={id} className="lbl">
           {label}
         </label>
-        <span className="rounded-md border border-white/10 bg-white/[0.06] px-2 py-0.5 font-mono text-sm tabular-nums text-cyan-300">
-          {value}
-          <span className="ml-1 text-[11px] text-slate-400">{unit}</span>
+        <span className="val" style={{ '--c1': c1 }}>
+          {Number(value).toFixed(digits)}
+          <i>{unit}</i>
         </span>
       </div>
       <input
@@ -250,11 +226,15 @@ function Slider({ id, label, unit, value, min, max, step = 1, onChange }) {
         max={max}
         step={step}
         value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{ background: `linear-gradient(to right, #22d3ee 0%, #6366f1 ${fill}%, rgb(30 41 59 / 0.85) ${fill}%)` }}
-        className="h-1.5 w-full cursor-pointer appearance-none rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-grab [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:shadow-[0_0_0_3px_#22d3ee59] [&::-webkit-slider-thumb]:mt-[-5px] [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[#05070d] [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-[0_0_0_3px_#22d3ee59,0_0_14px_#22d3eee6]"
+        onChange={handleChange}
+        className="range"
+        style={{
+          '--c1': c1,
+          '--c2': c2,
+          background: `linear-gradient(to right, ${c1} 0%, ${c2} ${fill}%, rgba(255,255,255,.12) ${fill}%)`,
+        }}
       />
-      <div className="mt-1.5 flex justify-between font-mono text-[10px] text-slate-500">
+      <div className="rng">
         <span>{min}</span>
         <span>{max}</span>
       </div>
@@ -265,10 +245,7 @@ function Slider({ id, label, unit, value, min, max, step = 1, onChange }) {
 function RiskChip({ tier }) {
   const t = TIERS[tier] || TIERS.Low;
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${t.chip}`}
-    >
-      <span className={`h-1.5 w-1.5 rounded-full ${t.dot}`} aria-hidden />
+    <span className="badge" style={{ '--k': t.k }}>
       {tier}
     </span>
   );
@@ -279,36 +256,31 @@ function Citation({ message }) {
   const c = pct(message.confidence);
   const count = message.citations.length;
   return (
-    <div className="mt-3">
+    <div className="src">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 text-xs font-medium text-cyan-200 transition hover:border-cyan-300/50 hover:bg-cyan-400/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60"
+        className="src-toggle"
       >
-        <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
+        <ShieldCheck aria-hidden />
         {count} {count === 1 ? 'source' : 'sources'}
-        {c != null && <span className="font-mono text-cyan-100">{c}% confidence</span>}
-        {open ? <ChevronUp className="h-3.5 w-3.5" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden />}
+        {c != null && <b>{c}% confidence</b>}
+        {open ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}
       </button>
       {open && (
-        <ul className="mt-2 space-y-1.5 rounded-xl border border-white/10 bg-white/[0.04] p-2 backdrop-blur-md">
-          {count === 0 && <li className="px-1 text-xs text-slate-400">No citations were returned for this answer.</li>}
+        <ul className="src-list">
+          {count === 0 && <li className="src-empty">No citations were returned for this answer.</li>}
           {message.citations.map((s, i) => (
             <li key={i}>
-              <a
-                href={s.url}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-start justify-between gap-3 rounded-lg px-2.5 py-2 text-xs text-slate-300 transition hover:bg-white/[0.06] hover:text-cyan-200"
-              >
-                <span className="min-w-0">
-                  <span className="block truncate">{s.title}</span>
-                  <span className="block truncate font-mono text-[11px] text-slate-500">{s.url}</span>
+              <a href={s.url} target="_blank" rel="noreferrer">
+                <span className="src-main">
+                  <span className="src-title">{s.title}</span>
+                  <span className="src-url">{s.url}</span>
                 </span>
-                <span className="flex shrink-0 items-center gap-1.5">
-                  {s.confidence != null && <span className="font-mono text-slate-400">{pct(s.confidence)}%</span>}
-                  <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                <span className="src-meta">
+                  {s.confidence != null && <span>{pct(s.confidence)}%</span>}
+                  <ExternalLink aria-hidden />
                 </span>
               </a>
             </li>
@@ -366,10 +338,10 @@ function AnswerText({ text, sources, onOpen }) {
             ? 'Show the passage this claim was drawn from'
             : 'No stored passage matched this citation'
         }
-        className="mx-0.5 inline-flex max-w-[200px] items-center gap-1 whitespace-nowrap rounded-md border border-cyan-400/35 bg-cyan-400/15 px-1.5 py-0.5 align-baseline font-mono text-[11px] font-medium text-cyan-200 transition hover:border-cyan-300/60 hover:bg-cyan-400/25 hover:text-cyan-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60"
+        className="cite"
       >
-        <FileText className="h-3 w-3 shrink-0" aria-hidden />
-        <span className="truncate">{whole.slice(1, -1)}</span>
+        <FileText aria-hidden />
+        <span>{whole.slice(1, -1)}</span>
       </button>
     );
     cursor = at + whole.length;
@@ -406,45 +378,32 @@ function SourceModal({ source, onClose }) {
       aria-modal="true"
       aria-label={`Source passage from ${filename}`}
     >
-      <div
-        onClick={onClose}
-        aria-hidden
-        className="absolute inset-0 bg-[#05070d]/85 backdrop-blur-sm"
-      />
-      <div className="relative flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0b1220] shadow-[0_40px_100px_-30px_#000000]">
-        <header className="flex items-start justify-between gap-3 border-b border-white/10 bg-white/[0.04] px-5 py-4">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-400/25 bg-cyan-400/10 text-cyan-300">
-              <FileText className="h-4 w-4" aria-hidden />
+      <div onClick={onClose} aria-hidden className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+      <div className="glass modal-card" style={{ '--a': '#a78bfa', '--b': '#f472b6' }}>
+        <header className="ph">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="ic" style={{ '--c': '#a78bfa' }}>
+              <FileText aria-hidden />
             </span>
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-white">{filename}</p>
-              <p className="truncate text-xs text-slate-400">
+              <p className="truncate text-sm font-semibold">{filename}</p>
+              <p className="truncate text-xs" style={{ color: 'var(--m)' }}>
                 Page {source.page ?? 'n/a'}
                 {source.source ? `  ·  ${source.source}` : ''}
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close source viewer"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.05] text-slate-400 transition hover:bg-white/[0.1] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60"
-          >
-            <X className="h-4 w-4" aria-hidden />
+          <button type="button" onClick={onClose} aria-label="Close source viewer" className="icon-btn">
+            <X aria-hidden />
           </button>
         </header>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-            Source text chunk · ChromaDB
-          </p>
+        <div className="modal-body">
+          <p className="modal-label">Source text chunk · ChromaDB</p>
           {snippet ? (
-            <p className="whitespace-pre-wrap rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm leading-relaxed text-slate-200">
-              {snippet}
-            </p>
+            <p className="snippet">{snippet}</p>
           ) : (
-            <p className="rounded-xl border border-amber-400/25 bg-amber-400/10 p-4 text-sm text-amber-100">
+            <p className="notice">
               This citation has no stored passage attached, so there is nothing to
               show here. The citations listed under the answer still link to the
               source document.
@@ -452,21 +411,18 @@ function SourceModal({ source, onClose }) {
           )}
         </div>
 
-        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 bg-white/[0.03] px-5 py-3">
-          <span className="text-xs text-slate-400">
+        <footer className="foot modal-foot">
+          <span>
             Retrieved from the NASA paper index
             {confidence != null && (
-              <span className="ml-2 font-mono text-slate-300">{confidence}% confidence</span>
+              <span style={{ marginLeft: 8, fontFamily: 'var(--mono)', color: 'var(--em)' }}>
+                {confidence}% confidence
+              </span>
             )}
           </span>
           {source.url && (
-            <a
-              href={source.url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-200 transition hover:bg-cyan-400/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60"
-            >
-              Open full document <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+            <a href={source.url} target="_blank" rel="noreferrer" className="btn-ghost">
+              Open full document <ExternalLink aria-hidden />
             </a>
           )}
         </footer>
@@ -708,6 +664,12 @@ export default function Dashboard() {
   const [thinking, setThinking] = useState(false);
   const [openSource, setOpenSource] = useState(null);
   const endRef = useRef(null);
+  // Header gains its glass bar once the page has scrolled.
+  const [scrolled, setScrolled] = useState(false);
+  // Backdrop canvases + the handle the effect below exposes (slider flare, gravity).
+  const starsRef = useRef(null);
+  const fireRef = useRef(null);
+  const fxRef = useRef(null);
 
   // Table
   const [showAllGravity, setShowAllGravity] = useState(false);
@@ -764,6 +726,222 @@ export default function Dashboard() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, thinking]);
+
+  /* ---------------------------------------------------------------- */
+  /* Space backdrop: twinkling stars + fire particles that follow the  */
+  /* pointer. The rAF loop and every listener are removed on cleanup.  */
+  /* ---------------------------------------------------------------- */
+  useEffect(() => {
+    const starCanvas = starsRef.current;
+    const fireCanvas = fireRef.current;
+    if (!starCanvas || !fireCanvas) return undefined;
+    const sx = starCanvas.getContext('2d');
+    const fc = fireCanvas.getContext('2d');
+    if (!sx || !fc) return undefined;
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const STAR_COLORS = ['#fff', '#cfe3ff', '#ffe7c7', '#e6d4ff'];
+    const MAX_PARTICLES = 1200;
+    const TAU = Math.PI * 2;
+
+    let W = window.innerWidth;
+    let H = window.innerHeight;
+    let stars = [];
+    let shoot = null;
+    let raf = 0;
+    let last = performance.now();
+
+    // Mutable animation state. `grav` and `slide` are driven from React.
+    const A = {
+      grav: 0,
+      mx: W / 2, my: H / 2, // pointer
+      ex: W / 2, ey: H / 2, // eased follower
+      px: W / 2, py: H / 2, // previous pointer, for speed
+      hue: 12, th: 12,      // current / target flame hue
+      boost: 0, drag: false, speed: 0,
+      pts: [],
+      slide(n) {
+        A.boost = 1;
+        A.th = 6 + n * 14;
+      },
+    };
+
+    const resize = () => {
+      W = window.innerWidth;
+      H = window.innerHeight;
+      for (const c of [starCanvas, fireCanvas]) {
+        c.width = Math.round(W * dpr);
+        c.height = Math.round(H * dpr);
+      }
+      sx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      fc.setTransform(dpr, 0, 0, dpr, 0, 0);
+      stars = Array.from({ length: Math.round((W * H) / 5500) }, () => ({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        r: Math.random() * 1.3 + 0.2,
+        p: Math.random() * 6.28,
+        s: Math.random() * 1.6 + 0.4,
+        d: Math.random() * 0.6 + 0.1,
+        c: STAR_COLORS[(Math.random() * STAR_COLORS.length) | 0],
+      }));
+    };
+
+    const onMove = (e) => {
+      A.mx = e.clientX;
+      A.my = e.clientY;
+    };
+    const onDown = (e) => {
+      if (e.target instanceof HTMLInputElement && e.target.type === 'range') A.drag = true;
+    };
+    const onUp = () => {
+      A.drag = false;
+    };
+
+    const frame = (t) => {
+      const dt = Math.min((t - last) / 1000, 0.05);
+      last = t;
+
+      /* stars: twinkle + slight parallax against the pointer */
+      sx.clearRect(0, 0, W, H);
+      const ox = (A.mx - W / 2) / W;
+      const oy = (A.my - H / 2) / H;
+      for (const s of stars) {
+        s.p += dt * s.s;
+        const a = 0.35 + 0.65 * Math.abs(Math.sin(s.p));
+        const x = (s.x - ox * s.d * 40 + W) % W;
+        const y = (s.y - oy * s.d * 40 + H) % H;
+        sx.globalAlpha = a;
+        sx.fillStyle = s.c;
+        sx.beginPath();
+        sx.arc(x, y, s.r, 0, TAU);
+        sx.fill();
+      }
+      sx.globalAlpha = 1;
+
+      /* occasional shooting star */
+      if (!shoot && Math.random() < 0.003) shoot = { x: Math.random() * W, y: Math.random() * H * 0.5, l: 1 };
+      if (shoot) {
+        const g = sx.createLinearGradient(shoot.x, shoot.y, shoot.x - 90, shoot.y - 40);
+        g.addColorStop(0, `rgba(255,255,255,${shoot.l})`);
+        g.addColorStop(1, 'transparent');
+        sx.strokeStyle = g;
+        sx.lineWidth = 1.6;
+        sx.beginPath();
+        sx.moveTo(shoot.x, shoot.y);
+        sx.lineTo(shoot.x - 90, shoot.y - 40);
+        sx.stroke();
+        shoot.x += 520 * dt;
+        shoot.y += 230 * dt;
+        shoot.l -= dt * 0.9;
+        if (shoot.l <= 0) shoot = null;
+      }
+
+      /* smooth followers (frame-rate independent easing) */
+      const k1 = 1 - Math.exp(-dt * 5);
+      A.speed += (Math.hypot(A.mx - A.px, A.my - A.py) / Math.max(dt, 0.001) / 1600 - A.speed) * (1 - Math.exp(-dt * 8));
+      A.px = A.mx;
+      A.py = A.my;
+      A.ex += (A.mx - A.ex) * k1;
+      A.ey += (A.my - A.ey) * k1;
+      A.hue += (A.th - A.hue) * (1 - Math.exp(-dt * 3));
+      A.boost *= Math.exp(-dt * 2.2);
+
+      /* fire: emit, then draw additively */
+      const power = Math.min(1, A.speed * 1.4) * 0.5 + (A.drag ? 1 : 0) + A.boost;
+      const n = Math.round(power * 9 + (Math.random() < (power * 3) % 1 ? 1 : 0));
+      const buoy = [0.6, 0.8, 1][A.grav === 0 ? 0 : A.grav < 1 ? 1 : 2];
+      for (let i = 0; i < n && A.pts.length < MAX_PARTICLES; i++) {
+        const ang = Math.random() * TAU;
+        const rad = Math.random() * 4;
+        A.pts.push({
+          x: A.ex + Math.cos(ang) * rad,
+          y: A.ey + Math.sin(ang) * rad,
+          vx: (Math.random() - 0.5) * 28 + (A.mx - A.ex) * 0.9,
+          vy: -(70 + Math.random() * 90) * buoy,
+          l: 1,
+          dl: 0.9 + Math.random() * 0.7,
+          s: 6 + Math.random() * 7 + power * 3,
+        });
+        if (Math.random() < 0.18) {
+          A.pts.push({
+            x: A.ex,
+            y: A.ey,
+            vx: (Math.random() - 0.5) * 70,
+            vy: -(110 + Math.random() * 130),
+            l: 1,
+            dl: 1.5 + Math.random(),
+            s: 1.8,
+          });
+        }
+      }
+
+      fc.clearRect(0, 0, W, H);
+      fc.globalCompositeOperation = 'lighter';
+      for (let i = A.pts.length - 1; i >= 0; i--) {
+        const p = A.pts[i];
+        p.l -= p.dl * dt;
+        if (p.l <= 0) {
+          A.pts.splice(i, 1);
+          continue;
+        }
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vx *= 0.96;
+        p.vy *= 0.99;
+        p.vx += Math.sin(t / 160 + p.y * 0.05 + p.s) * 70 * dt;
+        const r = p.s * (0.3 + p.l * 0.7);
+        const h = A.hue + p.l * p.l * 34;
+        const L = 40 + p.l * p.l * 48;
+        const al = Math.min(1, p.l * 1.6) * 0.6;
+        const g = fc.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 1.3);
+        g.addColorStop(0, `hsla(${h},100%,${L}%,${al})`);
+        g.addColorStop(0.5, `hsla(${h - 8},100%,${L - 14}%,${al * 0.6})`);
+        g.addColorStop(1, `hsla(${h - 14},100%,30%,0)`);
+        fc.fillStyle = g;
+        fc.beginPath();
+        fc.ellipse(p.x, p.y, r * 0.75, r * 1.3, 0, 0, TAU);
+        fc.fill();
+      }
+      fc.globalCompositeOperation = 'source-over';
+
+      raf = requestAnimationFrame(frame);
+    };
+
+    fxRef.current = A;
+    resize();
+    window.addEventListener('resize', resize);
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    raf = requestAnimationFrame(frame);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', resize);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      fxRef.current = null;
+    };
+  }, []);
+
+  // Fire buoyancy follows the selected gravity mode ('0g' -> 0, '0.16g' -> 0.16 ...).
+  useEffect(() => {
+    if (fxRef.current) fxRef.current.grav = parseFloat(gravity);
+  }, [gravity]);
+
+  // Sticky header: show the glass bar behind it once the page scrolls.
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Slider -> backdrop: flare the flame and shift its colour.
+  const slide = (n) => fxRef.current?.slide(n);
 
   const ranking = useMemo(
     () => remoteRank || localRank(params),
@@ -913,66 +1091,39 @@ export default function Dashboard() {
     setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }));
 
   return (
-    <div className="relative min-h-screen text-slate-100">
-      {/* Ambient backdrop: soft accent glows plus a grid that fades out */}
-      <div aria-hidden className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
-        <div className="absolute -left-40 -top-52 h-[34rem] w-[34rem] rounded-full bg-cyan-500/20 blur-[130px]" />
-        <div className="absolute -right-40 top-1/4 h-[38rem] w-[38rem] rounded-full bg-indigo-500/20 blur-[140px]" />
-        <div className="absolute -bottom-52 left-1/3 h-[32rem] w-[32rem] rounded-full bg-fuchsia-500/10 blur-[130px]" />
-        <div
-          className="absolute inset-0"
-          style={{
-            backgroundImage:
-              'linear-gradient(to right, rgba(148,163,184,0.07) 1px, transparent 1px), linear-gradient(to bottom, rgba(148,163,184,0.07) 1px, transparent 1px)',
-            backgroundSize: '44px 44px',
-            maskImage: 'radial-gradient(ellipse at 50% 0%, black 0%, transparent 70%)',
-            WebkitMaskImage: 'radial-gradient(ellipse at 50% 0%, black 0%, transparent 70%)',
-          }}
-        />
-      </div>
+    <div className="aethon">
+      {/* Backdrop: twinkling stars, then fire particles above them */}
+      <canvas ref={starsRef} id="stars" className="fx fx-stars" aria-hidden="true" />
+      <canvas ref={fireRef} id="fire" className="fx fx-fire" aria-hidden="true" />
 
-      {/* Header */}
-      <header className="sticky top-0 z-20 border-b border-white/10 bg-[#05070d]/75 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center justify-between gap-4 px-4 py-3.5 sm:px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-linear-to-br from-cyan-300 via-cyan-400 to-indigo-500 shadow-[0_10px_26px_-8px_#22d3ee]">
-              <Flame className="h-6 w-6 text-slate-950" aria-hidden />
+      {/* Sticky header. The bar behind the pill is a sibling layer (not an
+          ancestor) so the pill's own backdrop blur keeps working. */}
+      <div className="sticky top-0 z-50 px-5 pb-3 pt-[calc(env(safe-area-inset-top,0px)_+_14px)] [@media(max-height:520px)]:static">
+        <div
+          aria-hidden
+          className={`pointer-events-none absolute inset-0 -z-10 border-b border-white/10 bg-[#0b0f19]/80 backdrop-blur-md transition-opacity duration-300 ${
+            scrolled ? 'opacity-100' : 'opacity-0'
+          }`}
+        />
+        <header className="top glass mx-auto max-w-[1460px]">
+          <div className="brand">
+            <div className="logo">
+              <Flame aria-hidden />
             </div>
             <div>
-              <h1 className="bg-linear-to-r from-white via-cyan-100 to-cyan-300 bg-clip-text text-lg font-bold leading-tight tracking-tight text-transparent">
-                FLAME IN FREEFALL
-              </h1>
-              <p className="text-[11px] font-medium tracking-wide text-slate-400">
-                NASA Microgravity Combustion &amp; Fire Safety AI Platform
-              </p>
+              <h1>AETHON</h1>
+              <div className="sub">NASA Microgravity Combustion &amp; Fire Safety AI Platform</div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
-            <span
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-medium ${
-                apiOnline
-                  ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
-                  : 'border-amber-400/30 bg-amber-400/10 text-amber-200'
-              }`}
-            >
-              <span className="relative flex h-1.5 w-1.5">
-                <span
-                  className={`halo absolute inline-flex h-full w-full rounded-full ${
-                    apiOnline ? 'bg-emerald-400' : 'bg-amber-400'
-                  }`}
-                />
-                <span
-                  className={`relative inline-flex h-1.5 w-1.5 rounded-full ${
-                    apiOnline ? 'bg-emerald-300' : 'bg-amber-300'
-                  }`}
-                />
-              </span>
+          <div className="bar">
+            <span className={`pill ${apiOnline ? 'p-em' : 'p-am'}`}>
+              <span className={`dot${apiOnline ? '' : ' off'}`} aria-hidden />
               {apiOnline ? 'FastAPI: Connected' : 'FastAPI: Offline (demo mode)'}
             </span>
 
-            <span className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 text-[11px] font-medium text-cyan-200">
-              <Database className="h-3 w-3" aria-hidden />
+            <span className="pill p-cy">
+              <Database aria-hidden />
               ChromaDB: Indexed
             </span>
 
@@ -982,13 +1133,9 @@ export default function Dashboard() {
                   ? 'Answers are synthesised by Gemini and grounded in the retrieved papers.'
                   : 'Add GEMINI_API_KEY to .env next to main.py, then restart the backend.'
               }
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-medium ${
-                geminiOn
-                  ? 'border-violet-400/30 bg-violet-400/10 text-violet-200'
-                  : 'border-white/10 bg-white/[0.04] text-slate-400'
-              }`}
+              className={`pill ${geminiOn ? 'p-vi' : 'p-mu'}`}
             >
-              <Sparkles className="h-3 w-3" aria-hidden />
+              <Sparkles aria-hidden />
               {geminiOn ? 'Gemini: Ready' : 'Gemini: add key to .env'}
             </span>
 
@@ -996,69 +1143,58 @@ export default function Dashboard() {
               type="button"
               onClick={exportSummary}
               title="Download a report of the current settings, risk matrix scores and latest AI analysis"
-              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:border-cyan-400/40 hover:bg-cyan-400/10 hover:text-cyan-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60"
+              className="btn-ghost"
             >
-              <Download className="h-3.5 w-3.5" aria-hidden />
+              <Download aria-hidden />
               Export Summary Report
             </button>
 
-            <div role="group" aria-label="Gravity mode" className="flex rounded-full border border-white/10 bg-white/[0.04] p-1">
+            <div role="group" aria-label="Gravity mode" className="seg">
               {GRAVITY_MODES.map((g) => (
                 <button
                   key={g.value}
                   type="button"
                   onClick={() => setGravity(g.value)}
                   aria-pressed={gravity === g.value}
-                  className={`rounded-full px-3.5 py-1.5 text-left transition duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
-                    gravity === g.value
-                      ? 'bg-linear-to-r from-cyan-400 to-indigo-400 font-bold text-slate-950 shadow-[0_6px_18px_-8px_#22d3ee]'
-                      : 'text-slate-400 hover:bg-white/[0.06] hover:text-slate-200'
-                  }`}
+                  className={gravity === g.value ? 'on' : ''}
                 >
-                  <span className="block text-xs">{g.label}</span>
-                  <span className="hidden text-[10px] opacity-80 sm:block">{g.sub}</span>
+                  <b>{g.label}</b>
+                  <small>{g.sub}</small>
                 </button>
               ))}
             </div>
           </div>
-        </div>
-      </header>
+        </header>
+      </div>
 
-      <main className="relative z-10 mx-auto max-w-[1500px] space-y-5 px-4 py-6 sm:px-6 sm:py-8">
-        <div className="grid gap-5 lg:grid-cols-12">
+      <div className="wrap pt-2">
+        <main className="layout">
           {/* Left column */}
-          <div className="space-y-5 lg:col-span-5">
-            <Panel title="Experiment controls" icon={Wind} delay={0}>
-              <div className="space-y-6 p-5">
-                <Slider id="o2" label="Oxygen concentration" unit="%" value={oxygen} min={15} max={35} onChange={setOxygen} />
-                <Slider id="p" label="Ambient pressure" unit="kPa" value={pressure} min={50} max={150} step={0.1} onChange={setPressure} />
-                <Slider id="v" label="Forced airflow velocity" unit="cm/s" value={airflow} min={0} max={50} onChange={setAirflow} />
+          <div className="left">
+            <Panel title="Experiment controls" icon={Wind} a="#22d3ee" b="#a78bfa">
+              <div className="pb">
+                <Slider id="o2" label="Oxygen concentration" unit="%" value={oxygen} min={15} max={35} c1="#22d3ee" c2="#6366f1" onChange={setOxygen} onSlide={slide} />
+                <Slider id="p" label="Ambient pressure" unit="kPa" value={pressure} min={50} max={150} step={0.1} digits={1} c1="#a78bfa" c2="#f472b6" onChange={setPressure} onSlide={slide} />
+                <Slider id="v" label="Forced airflow velocity" unit="cm/s" value={airflow} min={0} max={50} c1="#fbbf24" c2="#fb923c" onChange={setAirflow} onSlide={slide} />
 
                 <div>
-                  <label htmlFor="fuel" className="mb-2 block text-[13px] font-medium text-slate-300">
+                  <label htmlFor="fuel" className="lbl mb-2 block">
                     Fuel specimen
                   </label>
                   <select
                     id="fuel"
                     value={fuel}
                     onChange={(e) => setFuel(e.target.value)}
-                    className="w-full rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2.5 text-sm text-slate-100 transition hover:border-white/20 focus:border-cyan-400/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/40"
+                    className="field"
                   >
                     {FUELS.map((f) => (
-                      <option key={f} className="bg-slate-950 text-slate-100">
-                        {f}
-                      </option>
+                      <option key={f}>{f}</option>
                     ))}
                   </select>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={runSimulation}
-                  disabled={running}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-linear-to-r from-cyan-400 to-indigo-400 px-4 py-3 text-sm font-bold tracking-wide text-slate-950 shadow-[0_14px_34px_-14px_#22d3ee] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_40px_-14px_#818cf8] focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#05070d] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
-                >
-                  {running ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Play className="h-4 w-4" aria-hidden />}
+                <button type="button" onClick={runSimulation} disabled={running} className="run">
+                  {running ? <Loader2 className="animate-spin" aria-hidden /> : <Play fill="currentColor" aria-hidden />}
                   {running ? 'Ranking…' : 'RUN SIMULATION & RANK RISK'}
                 </button>
               </div>
@@ -1067,52 +1203,32 @@ export default function Dashboard() {
             <Panel
               title="Material flammability risk matrix"
               icon={AlertTriangle}
-              delay={60}
-              right={
-                <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 font-mono text-[11px] text-slate-400">
-                  {gravity}
-                </span>
-              }
+              a="#fb7185"
+              b="#fbbf24"
+              iconColor="#fb7185"
+              right={<span className="tag">{gravity}</span>}
             >
-              <div className="p-5">
-                <div className="grid gap-3 sm:grid-cols-3">
+              <div className="pb flush">
+                <div className="cols">
                   {['High', 'Medium', 'Low'].map((tier) => {
                     const t = TIERS[tier];
                     return (
-                      <div key={tier} className={`rounded-xl border p-3.5 backdrop-blur-sm transition ${t.column}`}>
-                        <div className="mb-1 flex items-center justify-between gap-2">
-                          <h3 className={`text-[13px] font-semibold ${t.heading}`}>{t.title}</h3>
-                          <span
-                            className={`rounded-full border px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${t.chip}`}
-                          >
-                            {byTier[tier].length}
-                          </span>
-                        </div>
-                        <p className="mb-3 text-[11px] leading-snug text-slate-400">{t.hint}</p>
-                        <ul className="space-y-2">
-                          {byTier[tier].length === 0 && (
-                            <li className="text-xs text-slate-500">None at these settings</li>
-                          )}
+                      <div key={tier} className="col" style={{ '--k': t.k }}>
+                        <h3>
+                          {t.title}
+                          <span>{byTier[tier].length}</span>
+                        </h3>
+                        <p>{t.hint}</p>
+                        <ul>
+                          {byTier[tier].length === 0 && <li className="none">None at these settings</li>}
                           {byTier[tier].map((r) => (
-                            <li
-                              key={r.material}
-                              className={`rounded-lg border px-2.5 py-2 transition ${
-                                r.material === selectedId
-                                  ? 'border-cyan-400/50 bg-slate-950/70 shadow-[0_0_16px_-6px_#22d3ee]'
-                                  : 'border-white/[0.08] bg-slate-950/40 hover:border-white/[0.16]'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="font-medium text-slate-200">{r.material}</span>
-                                <span className="font-mono font-semibold tabular-nums text-slate-300">
-                                  {Math.round(r.score * 100)}
-                                </span>
+                            <li key={r.material} className={r.material === selectedId ? 'sel' : ''}>
+                              <div>
+                                <span>{r.material}</span>
+                                <em>{Math.round(r.score * 100)}</em>
                               </div>
-                              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/[0.08]">
-                                <div
-                                  className={`h-full rounded-full transition-all duration-500 ${t.bar}`}
-                                  style={{ width: `${r.score * 100}%` }}
-                                />
+                              <div className="bar2">
+                                <span className="fill" style={{ width: `${r.score * 100}%` }} />
                               </div>
                             </li>
                           ))}
@@ -1121,8 +1237,8 @@ export default function Dashboard() {
                     );
                   })}
                 </div>
-                <p className="mt-3.5 flex items-start gap-1.5 text-xs leading-relaxed text-slate-400">
-                  <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-400" aria-hidden />
+                <p className="note">
+                  <Sparkles aria-hidden />
                   {rankNote}
                 </p>
               </div>
@@ -1133,39 +1249,17 @@ export default function Dashboard() {
           <Panel
             title="AI agent query console"
             icon={Sparkles}
-            delay={120}
-            className="flex min-h-[560px] flex-col lg:col-span-7"
-            right={
-              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[11px] text-slate-400">
-                Searching {gravity} records
-              </span>
-            }
+            a="#a78bfa"
+            b="#f472b6"
+            iconColor="#a78bfa"
+            className="chat right"
+            right={<span className="tag">Searching {gravity} records</span>}
           >
-            <div className="flex-1 space-y-4 overflow-y-auto p-5 lg:max-h-[640px]" aria-live="polite">
+            <div className="msgs" aria-live="polite">
               {messages.map((m) => (
-                <div key={m.id} className={`flex gap-3 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                  <span
-                    className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
-                      m.role === 'user'
-                        ? 'border-cyan-400/30 bg-cyan-400/15 text-cyan-200'
-                        : 'border-indigo-400/30 bg-indigo-400/15 text-indigo-200'
-                    }`}
-                  >
-                    {m.role === 'user' ? (
-                      <User className="h-4 w-4" aria-hidden />
-                    ) : (
-                      <Sparkles className="h-4 w-4" aria-hidden />
-                    )}
-                  </span>
-                  <div
-                    className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                      m.role === 'user'
-                        ? 'rounded-br-md border border-cyan-400/25 bg-linear-to-br from-cyan-500/25 to-indigo-500/20 text-cyan-50'
-                        : m.error
-                        ? 'rounded-bl-md border border-amber-400/30 bg-amber-400/10 text-amber-100'
-                        : 'rounded-bl-md border border-white/10 bg-white/[0.05] text-slate-200 shadow-[inset_0_1px_0_0_#ffffff0f]'
-                    }`}
-                  >
+                <div key={m.id} className={`m${m.role === 'user' ? ' u' : ''}`}>
+                  <span className="av">{m.role === 'user' ? 'You' : <Sparkles aria-hidden />}</span>
+                  <div className={`bub${m.error ? ' err' : ''}`}>
                     <p className="whitespace-pre-wrap">
                       {m.role === 'assistant' ? (
                         <AnswerText text={m.text} sources={m.sources} onOpen={setOpenSource} />
@@ -1178,144 +1272,113 @@ export default function Dashboard() {
                 </div>
               ))}
               {thinking && (
-                <div className="flex items-center gap-2.5 self-start rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs text-slate-400">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-cyan-300" aria-hidden /> Searching NASA records…
+                <div className="thinking">
+                  <Loader2 className="animate-spin" aria-hidden /> Searching NASA records…
                 </div>
               )}
               <div ref={endRef} />
             </div>
 
-            <form onSubmit={sendQuery} className="flex gap-2 border-t border-white/[0.07] bg-white/[0.02] p-4">
+            <form onSubmit={sendQuery} className="composer">
               <input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 placeholder="Ask about flame spread, extinction limits or materials"
                 aria-label="Ask the agent"
-                className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm text-slate-100 transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:bg-white/[0.07] focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/40"
+                autoComplete="off"
+                className="field"
               />
-              <button
-                type="submit"
-                disabled={!draft.trim() || thinking}
-                className="flex shrink-0 items-center gap-2 rounded-xl bg-linear-to-r from-cyan-400 to-indigo-400 px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_10px_26px_-14px_#22d3ee] transition hover:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
-              >
-                <Send className="h-4 w-4" aria-hidden />
+              <button type="submit" disabled={!draft.trim() || thinking} className="send">
+                <Send aria-hidden />
                 Send
               </button>
             </form>
           </Panel>
-        </div>
 
-        {/* Flame behavior index */}
-        <Panel
-          title="Flame behavior index"
-          icon={Activity}
-          delay={180}
-          right={
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-slate-300 transition hover:border-white/20">
-                <input
-                  type="checkbox"
-                  checked={showAllGravity}
-                  onChange={(e) => setShowAllGravity(e.target.checked)}
-                  className="h-3.5 w-3.5 accent-cyan-400"
-                />
-                All gravity levels
-              </label>
-              <select
-                value={riskFilter}
-                onChange={(e) => setRiskFilter(e.target.value)}
-                aria-label="Filter by risk"
-                className="rounded-lg border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-xs text-slate-200 transition hover:border-white/20 focus:border-cyan-400/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/40"
-              >
-                {['All', 'High', 'Medium', 'Low'].map((r) => (
-                  <option key={r} className="bg-slate-950">
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </div>
-          }
-        >
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-sm">
-              <thead>
-                <tr className="border-b border-white/10 bg-white/[0.03] text-[11px] uppercase tracking-wider text-slate-400">
-                  {columns.map((c) => (
-                    <th
-                      key={c.label}
-                      scope="col"
-                      className={`px-4 py-3 font-semibold ${c.num ? 'text-right' : ''}`}
-                    >
-                      {c.key ? (
-                        <button
-                          type="button"
-                          onClick={() => toggleSort(c.key)}
-                          className="inline-flex items-center gap-1 transition hover:text-cyan-300 focus:outline-none focus-visible:text-cyan-300"
-                        >
-                          {c.label}
-                          {sort.key === c.key &&
-                            (sort.dir === 'asc' ? (
-                              <ArrowUp className="h-3 w-3" aria-hidden />
-                            ) : (
-                              <ArrowDown className="h-3 w-3" aria-hidden />
-                            ))}
-                        </button>
-                      ) : (
-                        c.label
-                      )}
-                    </th>
+          {/* Flame behavior index */}
+          <Panel
+            title="Flame behavior index"
+            icon={Activity}
+            a="#fbbf24"
+            b="#22d3ee"
+            iconColor="#fbbf24"
+            className="full"
+            right={
+              <div className="tools">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={showAllGravity}
+                    onChange={(e) => setShowAllGravity(e.target.checked)}
+                  />
+                  All gravity levels
+                </label>
+                <select
+                  value={riskFilter}
+                  onChange={(e) => setRiskFilter(e.target.value)}
+                  aria-label="Filter by risk"
+                  className="field"
+                >
+                  {['All', 'High', 'Medium', 'Low'].map((r) => (
+                    <option key={r}>{r}</option>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.length === 0 && (
+                </select>
+              </div>
+            }
+          >
+            <div className="tw">
+              <table>
+                <thead>
                   <tr>
-                    <td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-500">
-                      No runs match these filters. Try “All gravity levels”.
-                    </td>
+                    {columns.map((c) => (
+                      <th key={c.label} scope="col" className={c.num ? 'r' : ''}>
+                        {c.key ? (
+                          <button type="button" onClick={() => toggleSort(c.key)}>
+                            {c.label}
+                            {sort.key === c.key &&
+                              (sort.dir === 'asc' ? <ArrowUp aria-hidden /> : <ArrowDown aria-hidden />)}
+                          </button>
+                        ) : (
+                          c.label
+                        )}
+                      </th>
+                    ))}
                   </tr>
-                )}
-                {rows.map((r) => (
-                  <tr
-                    key={r.id}
-                    className={`border-b border-white/[0.06] transition last:border-0 hover:bg-cyan-400/[0.07] ${
-                      r.fuel === selectedId
-                        ? 'bg-cyan-400/[0.09]'
-                        : r.id % 2 === 0
-                        ? 'bg-white/[0.02]'
-                        : ''
-                    }`}
-                  >
-                    <td className="px-4 py-3 font-medium text-slate-100">{r.fuel}</td>
-                    <td className="px-4 py-3 font-mono text-slate-300">{r.gravity}</td>
-                    <td className="px-4 py-3 text-right font-mono tabular-nums text-slate-300">{r.o2}</td>
-                    <td className="px-4 py-3 text-right font-mono tabular-nums text-slate-300">{r.airflow}</td>
-                    <td className="px-4 py-3 text-right font-mono font-semibold tabular-nums text-cyan-300">
-                      {r.spread.toFixed(1)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <RiskChip tier={r.risk} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <a
-                        href={r.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-cyan-300 transition hover:bg-cyan-400/10 hover:text-cyan-200"
-                      >
-                        Source <ExternalLink className="h-3 w-3" aria-hidden />
-                      </a>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="border-t border-white/[0.07] px-5 py-3 text-[11px] leading-relaxed text-slate-500">
-            Demo seed data. Spread rates are placeholders until they are replaced with metrics extracted from the NASA reports.
-          </p>
-        </Panel>
-      </main>
+                </thead>
+                <tbody>
+                  {rows.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="empty">
+                        No runs match these filters. Try “All gravity levels”.
+                      </td>
+                    </tr>
+                  )}
+                  {rows.map((r) => (
+                    <tr key={r.id} className={r.fuel === selectedId ? 'hl' : ''}>
+                      <td style={{ fontWeight: 500 }}>{r.fuel}</td>
+                      <td className="mo">{r.gravity}</td>
+                      <td className="mo r">{r.o2}</td>
+                      <td className="mo r">{r.airflow}</td>
+                      <td className="sp r">{r.spread.toFixed(1)}</td>
+                      <td>
+                        <RiskChip tier={r.risk} />
+                      </td>
+                      <td>
+                        <a href={r.url} target="_blank" rel="noreferrer">
+                          Source <ExternalLink aria-hidden />
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="foot">
+              Demo seed data. Spread rates are placeholders until they are replaced with metrics extracted from the NASA reports.
+            </p>
+          </Panel>
+        </main>
+      </div>
 
       {openSource && (
         <SourceModal source={openSource} onClose={() => setOpenSource(null)} />

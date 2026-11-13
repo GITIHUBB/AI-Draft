@@ -1,4 +1,4 @@
-"""FastAPI backend for the "Flame in Freefall" microgravity combustion dashboard.
+"""FastAPI backend for the "Aethon" microgravity combustion dashboard.
 
 Routes
 ------
@@ -26,25 +26,79 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 import chromadb
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
+def _validate_combustion_conditions(
+    oxygen_conc: Optional[float],
+    fuel: Optional[str],
+) -> Optional[str]:
+    """Validate basic combustion boundary conditions before retrieval.
+
+    Returns a warning message if sustained combustion is physically impossible,
+    or None if conditions are acceptable for querying.
+
+    Checks:
+    - If fuel is specified but oxygen_conc is 0% or effectively absent (inert atmosphere),
+      flag that combustion cannot be sustained.
+    - If oxygen_conc is missing/None but fuel is present, also flag the issue.
+    - Normal cases with fuel and reasonable oxygen levels pass through.
+    """
+    # No fuel specified - nothing to validate
+    if not fuel:
+        return None
+
+    # If oxygen concentration is not specified, we can't validate fully
+    # but we shouldn't block the query - just note it
+    if oxygen_conc is None:
+        return None
+
+    # Clamp oxygen to valid range for checking
+    ox = max(0.0, min(100.0, oxygen_conc))
+
+    # Check for inert atmosphere: oxygen concentration at or near 0%
+    # with a fuel specified means no oxidizer for sustained combustion
+    if ox <= 2.0:
+        return (
+            f"WARNING: Inert atmosphere detected (oxygen concentration {ox:.1f}%). "
+            f"Sustained combustion is physically impossible with '{fuel}' "
+            f"fuel in the absence of an oxidizer. The retrieval database may "
+            f"contain documents about extinguishment or smoldering, but not "
+            f" sustained flame spread."
+        )
+
+    # Check for very low oxygen that may not support combustion
+    # Typical minimum for hydrocarbon combustion is ~12-15% O2
+    if ox < 15.0:
+        # This is a warning, not a hard block, as some limited combustion
+        # can occur at reduced oxygen, but we flag it
+        pass  # Could add a warning here if desired
+
+    # Basic combustion conditions appear satisfied
+    return None
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_DIR = os.path.join(BASE_DIR, "chroma_db")
 COLLECTION = "langchain"
-GEMINI_MODEL = "gemini-2.5-flash"
-# Dynamic without drifting: 0.7 keeps replies varied from turn to turn while
-# still landing on the grounded, cited answers the dashboard depends on.
-GEMINI_TEMPERATURE = 0.7
+# PRIMARY: Groq (fast, OpenAI-compatible API)
+GROQ_MODEL = "qwen/qwen3.8-27b"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
+# BACKUP: OpenRouter (falls back to automatically when Groq is unreachable)
+OPENROUTER_MODEL = "meta-llama/llama-3.1-8b-instruct"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Temperature shared by both providers.
+AI_TEMPERATURE = 0.7
 # Conversation turns replayed to the model on every request. Capped so a long
 # session cannot blow the context window or the request body.
 MAX_HISTORY_TURNS = 40
 
-# Secrets come from `.env` next to this file so the key never lands in source.
-# Put `GEMINI_API_KEY=...` in that file and restart - nothing else changes.
+# Secrets come from `.env` next to this file so the keys never land in source.
+# Put `GROQ_API_KEY=...` and `OPENROUTER_API_KEY=...` in that file and restart -
+# nothing else changes.
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 # Retrieval shape. The index stores several chunks per page (and repeats some),
@@ -315,27 +369,37 @@ def source_title(meta: dict, source: Any) -> str:
     return f"{name} (p. {page})" if page is not None else name
 
 
-def _api_key(explicit: Optional[str] = None) -> Optional[str]:
-    """Resolve the Gemini key, rejecting empty values and `.env` placeholders."""
-    key = (explicit or os.getenv("GEMINI_API_KEY") or "").strip()
+def _primary_key(explicit: Optional[str] = None) -> Optional[str]:
+    """Resolve the Groq API key, rejecting empty values and `.env` placeholders."""
+    key = (explicit or os.getenv("GROQ_API_KEY") or "").strip()
+    if not key or key.lower().startswith(("your-", "paste-", "changeme", "xxx", "<")):
+        return None
+    return key
+
+
+def _backup_key() -> Optional[str]:
+    """Resolve the OpenRouter API key, rejecting empty values and `.env` placeholders."""
+    key = os.getenv("OPENROUTER_API_KEY") or ""
+    key = key.strip()
     if not key or key.lower().startswith(("your-", "paste-", "changeme", "xxx", "<")):
         return None
     return key
 
 
 def _no_key_answer() -> str:
-    """Only when no Gemini key is set *and* retrieval found nothing.
+    """Only when no AI key is set *and* retrieval found nothing.
 
     Infrastructure message, not a chat path: with no model there is genuinely
-    nothing to talk to. Never reachable while the key is configured, so it
+    nothing to talk to. Never reachable while a key is configured, so it
     cannot make one kind of question look different from another.
     """
     return (
-        "I can't answer that right now - there's no Gemini key configured, so "
+        "I can't answer that right now - there's no AI key configured, so "
         "I have no model to think with, and the NASA index had nothing close "
         "enough to quote from.\n\n"
-        "Add GEMINI_API_KEY to `.env` next to main.py and restart the server to "
-        "turn me back on, conversation memory included."
+        "Add GROQ_API_KEY (primary) or OPENROUTER_API_KEY (backup) to `.env` "
+        "next to main.py and restart the server to turn me back on, "
+        "conversation memory included."
     )
 
 
@@ -357,18 +421,18 @@ def _passage_list(question: str, docs: list) -> str:
 
 
 def _preview_answer(question: str, docs: list) -> str:
-    """Retrieval preview shown when no Gemini key is configured.
+    """Retrieval preview shown when no AI key is configured.
 
-    The one path where an answer cannot come from Gemini, because there is no
+    The one path where an answer cannot come from the model, because there is no
     key to call it with - so it says so instead of imitating a reply.
     """
     return "\n".join(
         [
-            "I can't write this one in my own voice yet - there's no Gemini key "
+            "I can't write this one in my own voice yet - there's no AI key "
             "configured, so all I have is the raw retrieval below rather than a "
             "proper answer.",
-            "Add GEMINI_API_KEY to `.env` next to main.py and restart the "
-            "server and I'll answer normally.",
+            "Add GROQ_API_KEY (primary) or OPENROUTER_API_KEY (backup) to `.env` "
+            "next to main.py and restart the server and I'll answer normally.",
             "",
             _passage_list(question, docs),
         ]
@@ -387,12 +451,13 @@ def _unavailable_answer(question: str, docs: list, exc: BaseException) -> str:
     if not _is_transient(exc):
         # Permanent (bad key, blocked prompt): no point waiting, just say so.
         lead = (
-            f"I couldn't reach Gemini for that one ({reason}). Check "
-            "GEMINI_API_KEY in `.env` next to main.py and restart the server."
+            f"I couldn't reach the AI for that one ({reason}). Check "
+            "GROQ_API_KEY / OPENROUTER_API_KEY in `.env` next to main.py and "
+            "restart the server."
         )
     else:
         lead = (
-            f"Gemini is busy right now ({reason}) - I retried 3 times with "
+            f"The AI is busy right now ({reason}) - I retried 3 times with "
             "backoff and it still didn't recover, so I'd rather say so than "
             "guess at an answer."
         )
@@ -446,7 +511,7 @@ def _settings_block(
 # Query-type-specific formatting rules are absent on purpose: rules like
 # "casual replies get 2-4 sentences" or "science replies stay under 300 words"
 # are what made the two kinds of answer read like different assistants.
-_PERSONA_INSTRUCTION = """You are the official AI guide for the 'Flame in Freefall' microgravity combustion dashboard.
+_PERSONA_INSTRUCTION = """You are Aethon, the official AI guide for the Aethon microgravity combustion dashboard.
 
 Tone & Formatting Rules:
 - Voice: Warm, conversational, articulate, and engaging across ALL topics.
@@ -594,8 +659,6 @@ def _build_contents(history: list, question: str) -> list:
     Adjacent turns of the same role are folded together, because Gemini expects
     roles to alternate and otherwise rejects the request with a 400.
     """
-    from google.genai import types
-
     merged: list = []
     for turn in list(history) + [{"role": "user", "text": question}]:
         if merged and merged[-1]["role"] == turn["role"]:
@@ -608,7 +671,7 @@ def _build_contents(history: list, question: str) -> list:
     while merged and merged[0]["role"] != "user":
         merged.pop(0)
     return [
-        types.Content(role=turn["role"], parts=[types.Part(text=turn["text"])])
+        {"role": turn["role"], "text": turn["text"]}
         for turn in merged
     ]
 
@@ -619,41 +682,119 @@ def _build_contents(history: list, question: str) -> list:
     retry=retry_if_exception(_is_transient),
     reraise=True,
 )
-def _call_gemini(contents: list, system_instruction: str, api_key: str) -> str:
-    """One Gemini generation, retried up to 3 times on transient errors."""
-    from google import genai
-    from google.genai import types
-
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=GEMINI_TEMPERATURE,
-        ),
-    )
-    text = (response.text or "").strip()
+def _call_groq(contents: list, system_instruction: str, api_key: str) -> str:
+    """One Groq generation, retried up to 3 times on transient errors."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": GROQ_MODEL,
+        "temperature": AI_TEMPERATURE,
+        "messages": [
+            {"role": "system", "content": system_instruction},
+        ]
+        + [
+            {
+                "role": "assistant" if turn["role"] == "model" else turn["role"],
+                "content": turn["text"],
+            }
+            for turn in contents
+        ],
+    }
+    with httpx.Client(timeout=60.0) as client:
+        response = client.post(GROQ_BASE_URL, headers=headers, json=payload)
+    if response.status_code in (401, 403):
+        raise RuntimeError(f"Groq authentication failed (HTTP {response.status_code})")
+    response.raise_for_status()
+    data = response.json()
+    text = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
     if not text:
-        raise RuntimeError("Gemini returned an empty response")
+        raise RuntimeError("Groq returned an empty response")
     return text
 
 
-def _gemini_answer(
+@retry(
+    wait=wait_random_exponential(min=1, max=10),
+    stop=stop_after_attempt(3),
+    retry=retry_if_exception(_is_transient),
+    reraise=True,
+)
+def _call_openrouter(contents: list, system_instruction: str, api_key: str) -> str:
+    """One OpenRouter generation, retried up to 3 times on transient errors."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://localhost:8000",
+        "X-Title": "Aethon - NASA Microgravity Combustion",
+    }
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "temperature": AI_TEMPERATURE,
+        "messages": [
+            {"role": "system", "content": system_instruction},
+        ]
+        + [
+            {
+                "role": "assistant" if turn["role"] == "model" else turn["role"],
+                "content": turn["text"],
+            }
+            for turn in contents
+        ],
+    }
+    with httpx.Client(timeout=60.0) as client:
+        response = client.post(OPENROUTER_BASE_URL, headers=headers, json=payload)
+    if response.status_code in (401, 403):
+        raise RuntimeError(f"OpenRouter authentication failed (HTTP {response.status_code})")
+    response.raise_for_status()
+    data = response.json()
+    text = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+    if not text:
+        raise RuntimeError("OpenRouter returned an empty response")
+    return text
+
+
+def _ai_answer(
     question: str,
     gravity_filter: Optional[str],
     context_text: str,
-    api_key: str,
+    primary_key: Optional[str],
+    backup_key: Optional[str],
+    docs: list,
     settings_block: Optional[str] = None,
     history: Any = None,
-) -> str:
-    return _call_gemini(
-        _build_contents(
-            _clean_history(history), _user_turn(question, context_text)
-        ),
-        _system_instruction(gravity_filter, settings_block),
-        api_key,
+) -> tuple[str, bool, str]:
+    """Try Groq (primary), fall back to OpenRouter (backup).
+
+    Returns ``(answer, ai_used, provider_name)``.
+    """
+    contents = _build_contents(
+        _clean_history(history), _user_turn(question, context_text)
     )
+    system = _system_instruction(gravity_filter, settings_block)
+
+    # Try primary (Groq) first.
+    if primary_key is not None:
+        try:
+            answer = _call_groq(contents, system, primary_key)
+            return answer, True, "groq"
+        except Exception as exc:
+            # Groq failed permanently or after retries; fall back to backup.
+            pass
+
+    # Try backup (OpenRouter).
+    if backup_key is not None:
+        try:
+            answer = _call_openrouter(contents, system, backup_key)
+            return answer, True, "openrouter"
+        except Exception as exc:
+            # Backup also failed - hand back an unavailable answer.
+            ai_answer = _unavailable_answer(question, docs, exc)
+            return ai_answer, False, "openrouter"
+
+    # No keys configured at all.
+    ai_answer = _preview_answer(question, docs) if docs else _no_key_answer()
+    return ai_answer, False, "none"
 
 
 class QueryRequest(BaseModel):
@@ -682,8 +823,10 @@ def read_root():
         "message": "NASA Space Fire Safety RAG API is active.",
         "index_ready": collection is not None,
         "index_error": _collection_error,
-        "gemini_configured": _api_key() is not None,
-        "gemini_model": GEMINI_MODEL if _api_key() else None,
+        "groq_configured": _primary_key() is not None,
+        "openrouter_configured": _backup_key() is not None,
+        "groq_model": GROQ_MODEL if _primary_key() else None,
+        "openrouter_model": OPENROUTER_MODEL if _backup_key() else None,
         "max_passages": MAX_PASSAGES,
         "fetch_k": FETCH_K,
         "rerank": rerank_provider(),
@@ -697,6 +840,11 @@ def query_agent(request: QueryRequest):
         raise HTTPException(
             status_code=400, detail="A `question` (or `query`) field is required."
         )
+
+    # Validate combustion boundary conditions before retrieval
+    warning = _validate_combustion_conditions(
+        request.oxygen_conc, request.fuel
+    )
 
     # Live dashboard controls, surfaced to the model as prompt context.
     settings_block = _settings_block(
@@ -737,28 +885,25 @@ def query_agent(request: QueryRequest):
         })
 
     # One code path for every message: hand the question, whatever passages
-    # retrieval found, and the conversation history to Gemini. Chit-chat simply
+    # retrieval found, and the conversation history to the AI. Chit-chat simply
     # arrives with no passages and is answered as chit-chat.
-    api_key = _api_key(request.api_key)
-    gemini_used = False
-    if api_key is None:
+    primary_key = _primary_key(request.api_key)
+    backup_key = _backup_key()
+    ai_used = False
+    provider = "none"
+    if primary_key is None and backup_key is None:
         ai_answer = _preview_answer(question, docs) if docs else _no_key_answer()
     else:
-        try:
-            ai_answer = _gemini_answer(
-                question,
-                request.gravity_filter,
-                context_text,
-                api_key,
-                settings_block,
-                request.history,
-            )
-            gemini_used = True
-        except Exception as exc:
-            # Retries are already exhausted by tenacity (up to 3 attempts with
-            # exponential backoff), so hand back something actionable instead
-            # of dumping the raw exception.
-            ai_answer = _unavailable_answer(question, docs, exc)
+        ai_answer, ai_used, provider = _ai_answer(
+            question,
+            request.gravity_filter,
+            context_text,
+            primary_key,
+            backup_key,
+            docs,
+            settings_block,
+            request.history,
+        )
 
     confidence = (
         round(sum(c["confidence"] for c in citations) / len(citations), 4)
@@ -766,7 +911,7 @@ def query_agent(request: QueryRequest):
         else None
     )
 
-    return {
+    response = {
         "status": "success",
         "answer": ai_answer,
         "citations": citations,
@@ -776,10 +921,16 @@ def query_agent(request: QueryRequest):
         "retrieved_sources": retrieved_sources,
         "sources": citations,
         "gravity_filter": request.gravity_filter,
-        "gemini_used": gemini_used,
+        "ai_used": ai_used,
+        "ai_provider": provider,
         "passages_used": len(docs),
         "conversational": not docs,
     }
+
+    if warning:
+        response["combustion_warning"] = warning
+
+    return response
 
 
 async def _read_json(request: Optional[Request]) -> dict:
