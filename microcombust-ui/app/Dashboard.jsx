@@ -507,7 +507,6 @@ function buildSummaryReport(opts) {
     rankNote,
     analysis,
     apiOnline,
-    geminiOn,
     generatedAt,
   } = opts;
 
@@ -579,7 +578,7 @@ function buildSummaryReport(opts) {
   const meta =
     `<span class="status">Gravity ${escapeHtml(gravity)}</span>` +
     `<span class="status">FastAPI ${apiOnline ? 'connected' : 'offline'}</span>` +
-    `<span class="status">Gemini ${geminiOn ? 'ready' : 'key not set'}</span>` +
+    `<span class="status">AI ${aiProvider ? aiProvider : 'key not set'}</span>` +
     `<span>Generated ${escapeHtml(stamp.toLocaleString())}</span>`;
 
   return `<!DOCTYPE html>
@@ -653,7 +652,7 @@ export default function Dashboard() {
 
   // Backend status and ranking
   const [apiOnline, setApiOnline] = useState(true);
-  const [geminiOn, setGeminiOn] = useState(false);
+  const [aiProvider, setAiProvider] = useState(null);
   const [running, setRunning] = useState(false);
   const [remoteRank, setRemoteRank] = useState(null);
   const [rankNote, setRankNote] = useState(DEFAULT_RANK_NOTE);
@@ -700,12 +699,14 @@ export default function Dashboard() {
             activeApi = base;
             if (!cancelled) {
               setApiOnline(true);
-              // Health payload tells us whether a Gemini key was picked up, so
+              // Health payload tells us which AI provider was picked up, so
               // the header can say if answers will be synthesised or just
               // retrieved passages.
               try {
                 const health = await res.json();
-                setGeminiOn(Boolean(health?.gemini_configured));
+                if (health?.groq_configured) setAiProvider('groq');
+                else if (health?.openrouter_configured) setAiProvider('openrouter');
+                else setAiProvider(null);
               } catch {
                 /* unexpected body - leave the badge on "unknown" */
               }
@@ -978,7 +979,6 @@ export default function Dashboard() {
       rankNote,
       analysis: lastAnalysis,
       apiOnline,
-      geminiOn,
       generatedAt: now,
     });
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
@@ -1022,7 +1022,7 @@ export default function Dashboard() {
     const query = draft.trim();
     if (!query || thinking) return;
     // Prior turns ride along with the request so the backend can replay them to
-    // Gemini as conversation history. This is what lets it remember details the
+    // the AI model as conversation history. This is what lets it remember details the
     // user mentioned earlier (a name, a preference) instead of starting cold.
     // `messages` still excludes the message being sent, so the new turn is not
     // duplicated in the history.
@@ -1129,14 +1129,16 @@ export default function Dashboard() {
 
             <span
               title={
-                geminiOn
-                  ? 'Answers are synthesised by Gemini and grounded in the retrieved papers.'
-                  : 'Add GEMINI_API_KEY to .env next to main.py, then restart the backend.'
+                aiProvider === 'groq'
+                  ? 'Answers are synthesised by Groq and grounded in the retrieved papers.'
+                  : aiProvider === 'openrouter'
+                    ? 'Answers are synthesised by OpenRouter and grounded in the retrieved papers.'
+                    : 'Add GROQ_API_KEY or OPENROUTER_API_KEY to .env next to main.py, then restart the backend.'
               }
-              className={`pill ${geminiOn ? 'p-vi' : 'p-mu'}`}
+              className={`pill ${aiProvider ? 'p-vi' : 'p-mu'}`}
             >
               <Sparkles aria-hidden />
-              {geminiOn ? 'Gemini: Ready' : 'Gemini: add key to .env'}
+              {aiProvider === 'groq' ? 'AI: Groq' : aiProvider === 'openrouter' ? 'AI: OpenRouter' : 'AI: add key to .env'}
             </span>
 
             <button
