@@ -1024,7 +1024,7 @@ if __name__ == "__main__":
 
     port = int(os.getenv("PORT") or pick_port(8000))
     print(f"NASA Space Fire Safety API -> http://127.0.0.1:{port}", flush=True)
-    uvicorn.run(app, host="127.0.0.1", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 
 

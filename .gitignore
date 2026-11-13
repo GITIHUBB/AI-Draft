@@ -1,5 +1,4 @@
 
-chroma_db/
 .venv/
 *.sqlite3
 node_modules/
@@ -8,3 +7,4 @@ microcombust-ui/.next/
 *.log
 __pycache__/
 .env
+!chroma_db/*.sqlite3
